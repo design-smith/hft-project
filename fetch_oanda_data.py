@@ -1,34 +1,37 @@
+"""
+Module for fetching forex data from OANDA API.
+Enhanced to support statistical arbitrage with multi-pair fetching capabilities.
+"""
+
 import os
 import time
 import logging
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Union
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
 from dotenv import load_dotenv
+import concurrent.futures
 
 # Load environment variables
 load_dotenv()
 
-# Logger setup
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('oanda_fetcher.log'),
-        logging.StreamHandler()
-    ]
 )
 logger = logging.getLogger('OANDAFetcher')
 
 # Constants
-OANDA_API_URL = os.getenv('OANDA_API_URL')
+OANDA_API_URL = os.getenv('OANDA_API_URL', 'https://api-fxtrade.oanda.com/v3')
 INSTRUMENTS = os.getenv('INSTRUMENTS', 'EUR_USD,GBP_USD,USD_JPY,USD_CAD').split(',')
 
 class OandaDataFetcher:
     """
-    Class for fetching forex data from OANDA API with error handling and rate limiting.
+    Enhanced class for fetching forex data from OANDA API with support for
+    fetching multiple currency pairs simultaneously.
     """
     def __init__(self, api_key: Optional[str] = None):
         """Initialize the OandaDataFetcher with API credentials."""
@@ -51,6 +54,11 @@ class OandaDataFetcher:
         self.request_count = 0
         self.last_request_time = datetime.now()
         self.rate_limit_pause = 1.0  # seconds between requests
+        
+        # Set maximum workers for parallel requests
+        self.max_workers = min(10, os.cpu_count() * 2)
+        
+        logger.info(f"Initialized OandaDataFetcher with max_workers={self.max_workers}")
 
     def _handle_rate_limit(self):
         """Implement rate limiting"""
@@ -197,7 +205,7 @@ class OandaDataFetcher:
                 candles = response_data['candles']
                 all_candles.extend(candles)
                 logger.info(f"Fetched {len(candles)} candles")
-                time.sleep(1)  # Rate limiting
+                time.sleep(0.5)  # Small pause for rate limiting
             else:
                 logger.error(f"Failed to fetch data for {instrument} from {start} to {end}")
                 
@@ -205,6 +213,118 @@ class OandaDataFetcher:
             return None
             
         return self._process_candles(all_candles)
+    
+    def fetch_multiple_instruments(
+        self, 
+        instruments: List[str], 
+        timeframe: str = "H1",
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        days_back: Optional[int] = None,
+        parallel: bool = True
+    ) -> Dict[str, pd.DataFrame]:
+        """
+        Fetch data for multiple instruments, optionally in parallel.
+        
+        Args:
+            instruments: List of currency pairs to fetch
+            timeframe: Candle timeframe (e.g., "H1" for hourly)
+            start_time: Start time for data fetch
+            end_time: End time for data fetch (defaults to now)
+            days_back: Alternative to start_time, days to look back from end_time
+            parallel: Whether to fetch in parallel (faster but higher API load)
+            
+        Returns:
+            Dictionary of instrument -> DataFrame with price data
+        """
+        logger.info(f"Fetching data for {len(instruments)} instruments")
+        
+        # Calculate start and end times
+        if end_time is None:
+            end_time = datetime.now()
+            
+        if start_time is None and days_back is not None:
+            start_time = end_time - timedelta(days=days_back)
+        elif start_time is None:
+            start_time = end_time - timedelta(days=180)  # Default to 180 days
+        
+        result_data = {}
+        
+        if parallel:
+            # Fetch in parallel using ThreadPoolExecutor
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                # Create a dictionary of futures to instrument names
+                futures = {
+                    executor.submit(
+                        self.get_historical_candles, 
+                        instrument, 
+                        start_time, 
+                        end_time, 
+                        timeframe
+                    ): instrument 
+                    for instrument in instruments
+                }
+                
+                # Process results as they complete
+                for future in concurrent.futures.as_completed(futures):
+                    instrument = futures[future]
+                    try:
+                        df = future.result()
+                        if df is not None and not df.empty:
+                            result_data[instrument] = df
+                            logger.info(f"Successfully fetched {len(df)} candles for {instrument}")
+                        else:
+                            logger.error(f"Failed to fetch data for {instrument}")
+                    except Exception as e:
+                        logger.error(f"Error fetching {instrument}: {str(e)}")
+        else:
+            # Fetch sequentially
+            for instrument in instruments:
+                try:
+                    df = self.get_historical_candles(instrument, start_time, end_time, timeframe)
+                    if df is not None and not df.empty:
+                        result_data[instrument] = df
+                        logger.info(f"Successfully fetched {len(df)} candles for {instrument}")
+                    else:
+                        logger.error(f"Failed to fetch data for {instrument}")
+                except Exception as e:
+                    logger.error(f"Error fetching {instrument}: {str(e)}")
+        
+        logger.info(f"Successfully fetched data for {len(result_data)} out of {len(instruments)} instruments")
+        return result_data
+    
+    def fetch_for_cointegration(
+        self,
+        lookback_days: int = 180,
+        timeframe: str = "H1",
+        instruments: Optional[List[str]] = None
+    ) -> Dict[str, pd.DataFrame]:
+        """
+        Fetch data specifically for cointegration analysis.
+        
+        Args:
+            lookback_days: Number of days to look back (default: 180)
+            timeframe: Candle timeframe (default: "H1")
+            instruments: Optional list of instruments to fetch (default: all configured instruments)
+            
+        Returns:
+            Dictionary of instrument -> DataFrame with price data
+        """
+        if instruments is None:
+            instruments = INSTRUMENTS
+            
+        logger.info(f"Fetching data for cointegration analysis: {len(instruments)} instruments, {lookback_days} days lookback")
+        
+        end_time = datetime.now()
+        start_time = end_time - timedelta(days=lookback_days)
+        
+        return self.fetch_multiple_instruments(
+            instruments=instruments,
+            timeframe=timeframe,
+            start_time=start_time,
+            end_time=end_time,
+            parallel=True
+        )
         
     def _calculate_date_ranges(
         self, 
@@ -254,65 +374,87 @@ class OandaDataFetcher:
         
     def save_data_to_csv(
         self,
-        df: pd.DataFrame,
-        instrument: str,
-        timeframe: str
-    ) -> str:
-        """Save DataFrame to CSV file."""
-        output_dir = Path("data")
-        output_dir.mkdir(exist_ok=True)
+        data: Union[pd.DataFrame, Dict[str, pd.DataFrame]],
+        instrument: Optional[str] = None,
+        timeframe: str = "H1",
+        output_dir: str = "data"
+    ) -> Dict[str, str]:
+        """
+        Save data to CSV files.
         
-        filename = f"{instrument}_{timeframe}_{datetime.now().strftime('%Y%m%d')}.csv"
-        filepath = output_dir / filename
+        Args:
+            data: DataFrame or dictionary of DataFrames to save
+            instrument: Instrument name (required if data is a DataFrame)
+            timeframe: Timeframe of the data
+            output_dir: Directory to save the data
+            
+        Returns:
+            Dictionary mapping instruments to saved file paths
+        """
+        Path(output_dir).mkdir(exist_ok=True)
+        saved_files = {}
         
-        df.to_csv(filepath, index=False)
-        logger.info(f"Saved {len(df)} candles to {filepath}")
-        
-        return str(filepath)
+        if isinstance(data, pd.DataFrame):
+            if instrument is None:
+                raise ValueError("Instrument name is required when saving a single DataFrame")
+                
+            filename = f"{instrument}_{timeframe}_{datetime.now().strftime('%Y%m%d')}.csv"
+            filepath = os.path.join(output_dir, filename)
+            
+            data.to_csv(filepath, index=False)
+            logger.info(f"Saved {len(data)} candles to {filepath}")
+            saved_files[instrument] = filepath
+        else:
+            # Handle dictionary of DataFrames
+            for instr, df in data.items():
+                filename = f"{instr}_{timeframe}_{datetime.now().strftime('%Y%m%d')}.csv"
+                filepath = os.path.join(output_dir, filename)
+                
+                df.to_csv(filepath, index=False)
+                logger.info(f"Saved {len(df)} candles to {filepath}")
+                saved_files[instr] = filepath
+                
+        return saved_files
 
 
 def main():
-    """Example usage of the OandaDataFetcher."""
+    """
+    Example usage of the enhanced OandaDataFetcher for statistical arbitrage.
+    Demonstrates getting data for multiple instruments and preparing for cointegration analysis.
+    """
     fetcher = OandaDataFetcher()
     
-    #Fetch latest candles
-    instrument = "EUR_USD"
+    # Example 1: Fetch data for cointegration analysis
+    instruments = [
+        "EUR_USD", "GBP_USD", "USD_JPY", "USD_CAD", 
+        "AUD_USD", "NZD_USD", "EUR_GBP", "EUR_JPY"
+    ]
+    
     timeframe = "H1"
-    latest_df = fetcher.get_latest_candles(instrument, count=100, timeframe=timeframe)
+    lookback_days = 180
     
-    if latest_df is not None:
-        print("\nLatest candles:")
-        print(latest_df.head())
-        fetcher.save_data_to_csv(latest_df, instrument, f"{timeframe}_latest")
-    
-    #Fetch historical data for a date range
-    start_date = datetime.now() - timedelta(days=30)  # Last 30 days
-    end_date = datetime.now()
-    
-    historical_df = fetcher.get_historical_candles(
-        instrument, 
-        start_time=start_date,
-        end_time=end_date,
-        timeframe=timeframe
+    print(f"Fetching data for {len(instruments)} instruments over {lookback_days} days...")
+    pair_data = fetcher.fetch_for_cointegration(
+        lookback_days=lookback_days,
+        timeframe=timeframe,
+        instruments=instruments
     )
     
-    if historical_df is not None:
-        print("\nHistorical data sample:")
-        print(historical_df.head())
-        print(f"\nTotal candles fetched: {len(historical_df)}")
-        fetcher.save_data_to_csv(historical_df, instrument, f"{timeframe}_historical")
-        
-    #Fetch data for multiple instruments
-    instruments = ["EUR_USD", "GBP_USD", "USD_JPY"]
-    for instrument in instruments:
-        try:
-            print(f"\nFetching data for {instrument}...")
-            df = fetcher.get_latest_candles(instrument, count=50)
-            if df is not None:
-                print(f"Latest {instrument} data:")
-                print(df.head(3))
-        except Exception as e:
-            print(f"Error fetching {instrument}: {str(e)}")
+    print(f"Successfully fetched data for {len(pair_data)} instruments")
+    
+    # Example 2: Get latest data for a specific instrument
+    instrument = "EUR_USD"
+    latest_df = fetcher.get_latest_candles(instrument, count=100)
+    
+    if latest_df is not None:
+        print(f"\nLatest {instrument} data:")
+        print(latest_df.head())
+    
+    # Example 3: Save all data to CSV files
+    saved_files = fetcher.save_data_to_csv(pair_data, timeframe=timeframe)
+    print(f"\nSaved data to {len(saved_files)} CSV files")
+    
+    return pair_data  # Return data for further analysis
 
 
 if __name__ == "__main__":
