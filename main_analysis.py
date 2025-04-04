@@ -126,9 +126,12 @@ def generate_results_summary(
     rows = []
     
     for result in cointegration_results:
+        pair1 = result['pair1']  # Define pair1 here
+        pair2 = result['pair2']  # Define pair2 here
+        
         row = {
-            'pair1': result['pair1'],
-            'pair2': result['pair2'],
+            'pair1': pair1,
+            'pair2': pair2,
             'p_value': result['p_value'],
             'hedge_ratio': result['hedge_ratio'],
             'current_z_score': result['current_z_score'],
@@ -137,7 +140,7 @@ def generate_results_summary(
         }
         
         # Add signal information if available
-        signal_match = [s for s in signals if s['pair1'] == result['pair1'] and s['pair2'] == result['pair2']]
+        signal_match = [s for s in signals if s['pair1'] == pair1 and s['pair2'] == pair2]
         if signal_match:
             signal = signal_match[0]
             row['signal'] = f"{signal['action1']} {pair1} / {signal['action2']} {pair2}"
