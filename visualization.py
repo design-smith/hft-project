@@ -32,7 +32,7 @@ class CointegrationVisualizer:
         self.output_dir.mkdir(exist_ok=True)
         
         # Configure plot style
-        plt.style.use('seaborn-v0_8-darkgrid')
+        plt.style.use('seaborn-darkgrid')
         self.colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
         
         logger.info(f"Initialized CointegrationVisualizer with output directory: {output_dir}")
@@ -231,7 +231,7 @@ class CointegrationVisualizer:
             plt.tight_layout()
             
             if filename:
-                filepath = self.output_dir / filename
+                filepath = filename
                 plt.savefig(filepath)
                 logger.info(f"Saved correlation heatmap to {filepath}")
             
@@ -287,7 +287,7 @@ class CointegrationVisualizer:
         plt.tight_layout()
         
         if filename:
-            filepath = self.output_dir / filename
+            filepath = filename
             plt.savefig(filepath)
             logger.info(f"Saved cointegration results plot to {filepath}")
         

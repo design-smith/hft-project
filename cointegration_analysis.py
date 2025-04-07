@@ -11,6 +11,7 @@ from datetime import datetime
 import logging
 from statsmodels.tsa.stattools import coint
 from sklearn.linear_model import LinearRegression
+from statsmodels.regression.linear_model import OLS
 
 # Configure logging
 logging.basicConfig(
@@ -22,30 +23,20 @@ logger = logging.getLogger('CointegrationAnalysis')
 def align_price_data(df1: pd.DataFrame, df2: pd.DataFrame) -> Tuple[pd.Series, pd.Series]:
     """
     Align two price dataframes to ensure they have matching timestamps.
-    
-    Args:
-        df1: DataFrame for first currency pair
-        df2: DataFrame for second currency pair
-        
-    Returns:
-        Tuple of aligned price series (price1, price2)
     """
     logger.info("Aligning price data between two series")
     
-    # Ensure both have 'timestamp' column as index
     if 'timestamp' in df1.columns:
         df1 = df1.set_index('timestamp')
     if 'timestamp' in df2.columns:
         df2 = df2.set_index('timestamp')
     
-    # Find common timestamps
     common_index = df1.index.intersection(df2.index)
     
     if len(common_index) < 30:
         logger.warning(f"Insufficient common data points: {len(common_index)}")
         raise ValueError("Insufficient common data points for cointegration testing")
     
-    # Get closing prices for the common timestamps
     price1 = df1.loc[common_index, 'close']
     price2 = df2.loc[common_index, 'close']
     
@@ -55,19 +46,10 @@ def align_price_data(df1: pd.DataFrame, df2: pd.DataFrame) -> Tuple[pd.Series, p
 def calculate_hedge_ratio(price1: pd.Series, price2: pd.Series) -> float:
     """
     Calculate the hedge ratio between two price series using OLS regression.
-    
-    Args:
-        price1: Price series for first currency pair
-        price2: Price series for second currency pair
-        
-    Returns:
-        Hedge ratio (coefficient)
     """
-    # Reshape for sklearn
     X = price2.values.reshape(-1, 1)
     y = price1.values
     
-    # Fit linear regression
     model = LinearRegression().fit(X, y)
     hedge_ratio = model.coef_[0]
     
@@ -77,14 +59,6 @@ def calculate_hedge_ratio(price1: pd.Series, price2: pd.Series) -> float:
 def calculate_spread(price1: pd.Series, price2: pd.Series, hedge_ratio: Optional[float] = None) -> pd.Series:
     """
     Calculate the spread between two price series.
-    
-    Args:
-        price1: Price series for first currency pair
-        price2: Price series for second currency pair
-        hedge_ratio: Optional pre-calculated hedge ratio
-        
-    Returns:
-        Spread series
     """
     if hedge_ratio is None:
         hedge_ratio = calculate_hedge_ratio(price1, price2)
@@ -95,12 +69,6 @@ def calculate_spread(price1: pd.Series, price2: pd.Series, hedge_ratio: Optional
 def calculate_zscore(spread: pd.Series) -> pd.Series:
     """
     Calculate the z-score of a spread series.
-    
-    Args:
-        spread: Spread series
-        
-    Returns:
-        Z-score series
     """
     mean = spread.mean()
     std = spread.std()
@@ -110,17 +78,9 @@ def calculate_zscore(spread: pd.Series) -> pd.Series:
 def test_cointegration(price1: pd.Series, price2: pd.Series) -> Tuple[float, float]:
     """
     Test for cointegration between two price series.
-    
-    Args:
-        price1: Price series for first currency pair
-        price2: Price series for second currency pair
-        
-    Returns:
-        Tuple of (cointegration score, p-value)
     """
     logger.info("Testing cointegration between two price series")
     
-    # Perform Engle-Granger cointegration test
     score, p_value, _ = coint(price1, price2)
     
     logger.info(f"Cointegration test results - Score: {score}, P-value: {p_value}")
@@ -129,31 +89,44 @@ def test_cointegration(price1: pd.Series, price2: pd.Series) -> Tuple[float, flo
 def is_cointegrated(price1: pd.Series, price2: pd.Series, threshold: float = 0.05) -> bool:
     """
     Determine if two price series are cointegrated based on p-value threshold.
-    
-    Args:
-        price1: Price series for first currency pair
-        price2: Price series for second currency pair
-        threshold: P-value threshold for cointegration (default: 0.05)
-        
-    Returns:
-        Boolean indicating if the series are cointegrated
     """
     _, p_value = test_cointegration(price1, price2)
     return p_value < threshold
 
-def analyze_pair(df1: pd.DataFrame, df2: pd.DataFrame, pair1: str, pair2: str, threshold: float = 0.05) -> Optional[Dict]:
+def calculate_half_life(spread: pd.Series) -> float:
     """
-    Perform full cointegration analysis on a pair of currency pairs.
+    Calculate the half-life of mean reversion for the spread.
     
     Args:
-        df1: DataFrame for first currency pair
-        df2: DataFrame for second currency pair
-        pair1: Symbol for first currency pair
-        pair2: Symbol for second currency pair
-        threshold: P-value threshold for cointegration
+        spread: Spread series
         
     Returns:
-        Dictionary with analysis results or None if not cointegrated
+        Half-life in periods (e.g., hours if timeframe is H1)
+    """
+    spread_lag = spread.shift(1).dropna()
+    spread_diff = spread.diff().dropna()
+    
+    # Ensure lengths match
+    spread_lag = spread_lag[1:]
+    spread_diff = spread_diff[1:]
+    
+    # Add constant term for OLS regression
+    spread_lag_with_const = np.vstack([spread_lag, np.ones(len(spread_lag))]).T
+    
+    # Fit OLS regression: spread_diff ~ spread_lag
+    model = OLS(spread_diff, spread_lag_with_const).fit()
+    beta = model.params[0]
+    
+    if beta >= 0:
+        logger.warning("Non-mean-reverting spread detected (beta >= 0)")
+        return np.inf  # Infinite half-life if not mean-reverting
+    
+    half_life = -np.log(2) / beta
+    return half_life
+
+def analyze_pair(df1: pd.DataFrame, df2: pd.DataFrame, pair1: str, pair2: str, threshold: float = 0.05) -> Optional[Dict]:
+    """
+    Perform full cointegration analysis on a pair of currency pairs, including half-life.
     """
     logger.info(f"Analyzing potential cointegration between {pair1} and {pair2}")
     
@@ -164,7 +137,6 @@ def analyze_pair(df1: pd.DataFrame, df2: pd.DataFrame, pair1: str, pair2: str, t
         # Test cointegration
         score, p_value = test_cointegration(price1, price2)
         
-        # If not cointegrated, return None
         if p_value >= threshold:
             logger.info(f"{pair1} and {pair2} are not cointegrated (p-value: {p_value})")
             return None
@@ -175,6 +147,9 @@ def analyze_pair(df1: pd.DataFrame, df2: pd.DataFrame, pair1: str, pair2: str, t
         # Calculate spread and z-score
         spread = calculate_spread(price1, price2, hedge_ratio)
         z_score = calculate_zscore(spread)
+        
+        # Calculate half-life
+        half_life = calculate_half_life(spread)
         
         # Create result dictionary
         result = {
@@ -190,10 +165,11 @@ def analyze_pair(df1: pd.DataFrame, df2: pd.DataFrame, pair1: str, pair2: str, t
             'spread_series': spread.values.tolist(),
             'z_score_series': z_score.values.tolist(),
             'timestamps': price1.index.tolist(),
+            'half_life': float(half_life),
             'analysis_time': datetime.now().isoformat()
         }
         
-        logger.info(f"Found cointegration between {pair1} and {pair2} (p-value: {p_value})")
+        logger.info(f"Found cointegration between {pair1} and {pair2} (p-value: {p_value}, half-life: {half_life:.2f})")
         return result
     
     except Exception as e:
@@ -206,38 +182,53 @@ def find_cointegrated_pairs(
 ) -> List[Dict]:
     """
     Find all cointegrated pairs from a dictionary of price data.
-    
-    Args:
-        pair_data: Dictionary of currency pairs with their price DataFrames
-        threshold: P-value threshold for cointegration
-        
-    Returns:
-        List of dictionaries with cointegration analysis results
     """
     logger.info(f"Searching for cointegrated pairs among {len(pair_data)} currency pairs")
     
     results = []
     pairs = list(pair_data.keys())
     
-    # Test all possible pairs
     for i in range(len(pairs)):
         for j in range(i+1, len(pairs)):
             pair1 = pairs[i]
             pair2 = pairs[j]
             
-            # Skip if not enough data
             if len(pair_data[pair1]) < 30 or len(pair_data[pair2]) < 30:
                 logger.warning(f"Skipping {pair1}/{pair2} due to insufficient data")
                 continue
             
-            # Analyze the pair
             result = analyze_pair(pair_data[pair1], pair_data[pair2], pair1, pair2, threshold)
             
             if result:
                 results.append(result)
     
-    # Sort results by p-value (most significant first)
     results.sort(key=lambda x: x['p_value'])
     
     logger.info(f"Found {len(results)} cointegrated pairs")
     return results
+
+class Backtest:
+    def __init__(self, initial_capital=10000):
+        self.capital = initial_capital
+        self.equity = [initial_capital]
+        self.trades = []
+
+    def simulate(self, cointegration_results, pair_data):
+        trades = []
+        for result in cointegration_results:
+            pair1 = result['pair1']
+            pair2 = result['pair2']
+            z_scores = pd.Series(result['z_score_series'], index=result['timestamps'])
+            position = 0
+            for t in range(1, len(z_scores)):
+                if position == 0 and abs(z_scores[t]) > 1.0:  # Entry condition
+                    position = 1 if z_scores[t] < -1.0 else -1
+                    entry_price1 = pair_data[pair1]['close'].iloc[t]
+                    entry_price2 = pair_data[pair2]['close'].iloc[t]
+                elif position != 0 and abs(z_scores[t]) < 0.5:  # Exit condition
+                    exit_price1 = pair_data[pair1]['close'].iloc[t]
+                    exit_price2 = pair_data[pair2]['close'].iloc[t]
+                    pl = (exit_price1 - entry_price1) * position - (exit_price2 - entry_price2) * position * result['hedge_ratio']
+                    trades.append({'pair1': pair1, 'pair2': pair2, 'pl': pl})
+                    position = 0
+        return pd.DataFrame(trades)

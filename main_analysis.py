@@ -1,7 +1,7 @@
 """
 Main entry point for the statistical arbitrage analysis system.
 This script combines data fetching, cointegration analysis, trading signal generation,
-and visualization to create a complete forex statistical arbitrage workflow.
+backtesting, and visualization to create a complete forex statistical arbitrage workflow.
 """
 
 import os
@@ -30,6 +30,44 @@ logging.basicConfig(
 )
 logger = logging.getLogger('StatArbMain')
 
+### Backtest Class Definition
+class Backtest:
+    def __init__(self, initial_capital=10000):
+        self.capital = initial_capital
+        self.equity = [initial_capital]
+        self.trades = []
+
+    def simulate(self, cointegration_results, pair_data):
+        """
+        Simulate trading based on cointegration results and historical price data.
+        
+        Args:
+            cointegration_results: List of dictionaries containing cointegration analysis results
+            pair_data: Dictionary of DataFrames with price data for each currency pair
+            
+        Returns:
+            DataFrame containing trade results
+        """
+        trades = []
+        for result in cointegration_results:
+            pair1 = result['pair1']
+            pair2 = result['pair2']
+            z_scores = pd.Series(result['z_score_series'], index=result['timestamps'])
+            position = 0
+            for t in range(1, len(z_scores)):
+                if position == 0 and abs(z_scores[t]) > 1.0:  # Entry condition
+                    position = 1 if z_scores[t] < -1.0 else -1
+                    entry_price1 = pair_data[pair1]['close'].iloc[t]
+                    entry_price2 = pair_data[pair2]['close'].iloc[t]
+                elif position != 0 and abs(z_scores[t]) < 0.5:  # Exit condition
+                    exit_price1 = pair_data[pair1]['close'].iloc[t]
+                    exit_price2 = pair_data[pair2]['close'].iloc[t]
+                    pl = (exit_price1 - entry_price1) * position - (exit_price2 - entry_price2) * position * result['hedge_ratio']
+                    trades.append({'pair1': pair1, 'pair2': pair2, 'pl': pl})
+                    position = 0
+        return pd.DataFrame(trades)
+
+### Argument Parsing
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description='Statistical Arbitrage Analysis')
@@ -64,6 +102,7 @@ def parse_args():
     
     return parser.parse_args()
 
+### Data Loading
 def load_cached_data(data_dir: str, pairs: List[str], timeframe: str) -> Dict[str, pd.DataFrame]:
     """
     Load data from cached CSV files.
@@ -81,23 +120,18 @@ def load_cached_data(data_dir: str, pairs: List[str], timeframe: str) -> Dict[st
     pair_data = {}
     
     for pair in pairs:
-        # Find the latest file for this pair and timeframe
         files = list(data_dir.glob(f"{pair}_{timeframe}_*.csv"))
         
         if not files:
             logger.warning(f"No cached data found for {pair}_{timeframe}")
             continue
             
-        # Get the most recent file
         latest_file = max(files, key=lambda p: p.stat().st_mtime)
         
         try:
             df = pd.read_csv(latest_file)
-            
-            # Convert timestamp to datetime
             if 'timestamp' in df.columns:
                 df['timestamp'] = pd.to_datetime(df['timestamp'])
-            
             pair_data[pair] = df
             logger.info(f"Loaded {len(df)} rows for {pair} from {latest_file}")
         except Exception as e:
@@ -105,6 +139,7 @@ def load_cached_data(data_dir: str, pairs: List[str], timeframe: str) -> Dict[st
     
     return pair_data
 
+### Results Summary
 def generate_results_summary(
     cointegration_results: List[Dict], 
     signals: List[Dict]
@@ -122,13 +157,10 @@ def generate_results_summary(
     if not cointegration_results:
         return pd.DataFrame()
     
-    # Create summary rows
     rows = []
-    
     for result in cointegration_results:
-        pair1 = result['pair1']  # Define pair1 here
-        pair2 = result['pair2']  # Define pair2 here
-        
+        pair1 = result['pair1']
+        pair2 = result['pair2']
         row = {
             'pair1': pair1,
             'pair2': pair2,
@@ -139,7 +171,6 @@ def generate_results_summary(
             'spread_std': result['spread_std']
         }
         
-        # Add signal information if available
         signal_match = [s for s in signals if s['pair1'] == pair1 and s['pair2'] == pair2]
         if signal_match:
             signal = signal_match[0]
@@ -153,17 +184,15 @@ def generate_results_summary(
         
         rows.append(row)
     
-    # Create DataFrame and sort by p-value
     summary_df = pd.DataFrame(rows)
     summary_df = summary_df.sort_values('p_value')
-    
     return summary_df
 
+### Saving Results
 def save_results_to_csv(results: Any, filename: str, output_dir: str):
     """Save results to CSV file."""
     output_dir = Path(output_dir)
     output_dir.mkdir(exist_ok=True)
-    
     filepath = output_dir / filename
     
     if isinstance(results, pd.DataFrame):
@@ -176,8 +205,9 @@ def save_results_to_csv(results: Any, filename: str, output_dir: str):
     
     logger.info(f"Saved results to {filepath}")
 
+### Main Analysis Workflow
 def run_analysis(args):
-    """Run the full statistical arbitrage analysis workflow."""
+    """Run the full statistical arbitrage analysis workflow with backtesting."""
     logger.info("Starting statistical arbitrage analysis")
     
     # Parse currency pairs
@@ -190,10 +220,8 @@ def run_analysis(args):
     
     # Step 1: Fetch or load data
     if args.skip_fetch:
-        # Load from cached files
         pair_data = load_cached_data(args.data_dir, pairs, args.timeframe)
     else:
-        # Fetch from OANDA
         logger.info(f"Fetching data for {len(pairs)} pairs, looking back {args.lookback} days")
         fetcher = OandaDataFetcher()
         pair_data = fetcher.fetch_for_cointegration(
@@ -201,8 +229,6 @@ def run_analysis(args):
             timeframe=args.timeframe,
             instruments=pairs
         )
-        
-        # Save fetched data
         fetcher.save_data_to_csv(pair_data, timeframe=args.timeframe, output_dir=args.data_dir)
     
     if not pair_data:
@@ -221,7 +247,6 @@ def run_analysis(args):
     
     logger.info(f"Found {len(cointegration_results)} cointegrated pairs")
     
-    # Save cointegration results
     save_results_to_csv(
         cointegration_results, 
         f"cointegration_results_{args.timeframe}_{datetime.now().strftime('%Y%m%d')}.csv", 
@@ -234,12 +259,10 @@ def run_analysis(args):
         z_score_entry=args.z_entry,
         z_score_exit=args.z_exit
     )
-    
     signals = strategy.generate_signals(cointegration_results)
     
     logger.info(f"Generated {len(signals)} trading signals")
     
-    # Save signals
     save_results_to_csv(
         signals,
         f"trading_signals_{args.timeframe}_{datetime.now().strftime('%Y%m%d')}.csv",
@@ -254,11 +277,20 @@ def run_analysis(args):
         output_dir
     )
     
-    # Step 4: Create visualizations
+    # Step 4: Perform backtesting
+    logger.info("Performing backtesting")
+    backtest = Backtest()
+    backtest_results = backtest.simulate(cointegration_results, pair_data)
+    print("Backtest Results:", backtest_results)
+    save_results_to_csv(
+        backtest_results,
+        f"backtest_results_{args.timeframe}_{datetime.now().strftime('%Y%m%d')}.csv",
+        output_dir
+    )
+    
+    # Step 5: Create visualizations
     logger.info("Creating visualizations")
     visualizer = CointegrationVisualizer(output_dir=str(output_dir / "plots"))
-    
-    # Create dashboard
     dashboard_dir = visualizer.create_dashboard(
         cointegration_results=cointegration_results,
         pair_data=pair_data,
@@ -275,18 +307,18 @@ def run_analysis(args):
         pd.set_option('display.width', 120)
         print(summary_df.head(10))
         
-        # Print trading signals
         entry_signals = [s for s in signals if s['signal_type'] == 'ENTRY']
         if entry_signals:
             print("\n====== TRADING SIGNALS ======")
             for signal in entry_signals:
                 print(f"{signal['pair1']}/{signal['pair2']}: {signal['action1']} {signal['pair1']} / "
-                     f"{signal['action2']} {signal['pair2']} (z-score: {signal['z_score']:.2f})")
+                      f"{signal['action2']} {signal['pair2']} (z-score: {signal['z_score']:.2f})")
     
     return {
         'cointegration_results': cointegration_results,
         'signals': signals,
         'summary': summary_df,
+        'backtest_results': backtest_results,
         'dashboard_dir': dashboard_dir
     }
 
