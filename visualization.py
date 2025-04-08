@@ -271,8 +271,8 @@ class CointegrationVisualizer:
         bars = plt.barh(pairs, p_values, color=self.colors[2])
         
         # Add 0.05 threshold line
-        plt.axvline(x=0.05, color='red', linestyle='--', 
-                    label='Significance Threshold (p=0.05)')
+        plt.axvline(x=0.1, color='red', linestyle='--', 
+                    label='Significance Threshold (p=0.10)')
         
         # Annotate p-values
         for i, bar in enumerate(bars):
