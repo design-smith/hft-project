@@ -207,7 +207,7 @@ def find_cointegrated_pairs(
     logger.info(f"Found {len(results)} cointegrated pairs")
     return results
 
-class Backtest:
+'''class Backtest:
     def __init__(self, initial_capital=10000):
         self.capital = initial_capital
         self.equity = [initial_capital]
@@ -231,4 +231,4 @@ class Backtest:
                     pl = (exit_price1 - entry_price1) * position - (exit_price2 - entry_price2) * position * result['hedge_ratio']
                     trades.append({'pair1': pair1, 'pair2': pair2, 'pl': pl})
                     position = 0
-        return pd.DataFrame(trades)
+        return pd.DataFrame(trades)'''

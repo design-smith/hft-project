@@ -37,6 +37,10 @@ class Backtest:
         self.equity = [initial_capital]
         self.trades = []
 
+        # stop loss params
+        self.long_stop_loss_z = 3
+        self.short_stop_loss_z = -3
+
     def simulate(self, cointegration_results, pair_data):
         """
         Simulate trading based on cointegration results and historical price data.
@@ -55,16 +59,34 @@ class Backtest:
             z_scores = pd.Series(result['z_score_series'], index=result['timestamps'])
             position = 0
             for t in range(1, len(z_scores)):
-                if position == 0 and abs(z_scores[t]) > 1.0:  # Entry condition
+                if position == 0 and abs(z_scores[t]) > 1.5:  # entry condition: anything between 1.5 and 2 sigma should be good
                     position = 1 if z_scores[t] < -1.0 else -1
                     entry_price1 = pair_data[pair1]['close'].iloc[t]
                     entry_price2 = pair_data[pair2]['close'].iloc[t]
-                elif position != 0 and abs(z_scores[t]) < 0.5:  # Exit condition
-                    exit_price1 = pair_data[pair1]['close'].iloc[t]
-                    exit_price2 = pair_data[pair2]['close'].iloc[t]
-                    pl = (exit_price1 - entry_price1) * position - (exit_price2 - entry_price2) * position * result['hedge_ratio']
-                    trades.append({'pair1': pair1, 'pair2': pair2, 'pl': pl})
-                    position = 0
+                
+                if position != 0:
+                    exit_trade = False
+                    stop_loss_triggered = False
+                    if abs(z_scores[t]) < 0.5:  # exit condition: needs to approach 0 or get very close to it
+                        exit_trade = True
+                    # stop loss for long and short positions
+                    elif (position == 1 and z_scores[t] > self.long_stop_loss_z) or (position == -1 and z_scores[t] > self.short_stop_loss_z):
+                        exit_trade = True
+                        stop_loss_triggered = True
+                    if exit_trade:
+                        exit_price1 = pair_data[pair1]['close'].iloc[t]
+                        exit_price2 = pair_data[pair2]['close'].iloc[t]
+                        pl = (exit_price1 - entry_price1) * position - (exit_price2 - entry_price2) * position * result['hedge_ratio']
+                        trades.append({
+                            'pair1': pair1,
+                            'pair2': pair2,
+                            'pl': pl,
+                            'stop_loss': stop_loss_triggered,
+                            'entry_z': z_scores.iloc[t-1],
+                            'exit_z': z_scores[t]
+                        })
+                        position = 0
+
         return pd.DataFrame(trades)
 
 ### Argument Parsing

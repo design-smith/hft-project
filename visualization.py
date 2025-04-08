@@ -29,10 +29,10 @@ class CointegrationVisualizer:
             output_dir: Directory for saving plots (default: "plots")
         """
         self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(exist_ok=True)
+        #self.output_dir.mkdir(exist_ok=True)
         
         # Configure plot style
-        plt.style.use('seaborn-darkgrid')
+        plt.style.use('seaborn-v0_8-darkgrid')
         self.colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
         
         logger.info(f"Initialized CointegrationVisualizer with output directory: {output_dir}")
@@ -161,8 +161,9 @@ class CointegrationVisualizer:
             if signal['pair1'] == pair1 and signal['pair2'] == pair2:
                 signal_time = pd.to_datetime(signal['signal_time'])
                 # Find the closest timestamp
-                closest_idx = min(range(len(timestamps)), 
-                                 key=lambda i: abs(timestamps[i] - signal_time))
+                timestamps_naive = [t.replace(tzinfo=None) for t in timestamps]
+                closest_idx = min(range(len(timestamps_naive)), 
+                                key=lambda i: abs(timestamps_naive[i] - signal_time))
                 
                 if closest_idx < len(timestamps):
                     z_score = signal['z_score']
@@ -410,13 +411,13 @@ class CointegrationVisualizer:
                 
                 self.plot_price_series(
                     price1, price2, pair1, pair2,
-                    filename=dashboard_dir / f"price_comparison_{pair1}_{pair2}.png"
+                    filename=f"price_comparison_{pair1}_{pair2}.png"
                 )
             
             # Spread and z-score
             self.plot_spread_and_zscore(
                 result, 
-                filename=dashboard_dir / f"spread_zscore_{pair1}_{pair2}.png",
+                filename=f"spread_zscore_{pair1}_{pair2}.png",
                 show_signals=signals is not None,
                 signals=signals
             )
