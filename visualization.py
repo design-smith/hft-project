@@ -4,6 +4,8 @@ Module for creating visualizations of cointegration data and trading signals.
 
 import pandas as pd
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
 from typing import Dict, List, Optional, Union, Tuple
 import logging
@@ -28,8 +30,11 @@ class CointegrationVisualizer:
         Args:
             output_dir: Directory for saving plots (default: "plots")
         """
-        self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(exist_ok=True)
+        # Store as string to avoid path issues
+        self.output_dir = output_dir
+        
+        # Create output directory
+        os.makedirs(output_dir, exist_ok=True)
         
         # Configure plot style
         plt.style.use('seaborn-v0_8-darkgrid')
@@ -76,11 +81,12 @@ class CointegrationVisualizer:
         plt.tight_layout()
         
         if filename:
-            filepath = self.output_dir / filename
-            plt.savefig(filepath)
-            logger.info(f"Saved price comparison plot to {filepath}")
+            try:
+                plt.savefig(filename)
+                logger.info(f"Saved price comparison plot to {filename}")
+            except Exception as e:
+                logger.error(f"Error saving price comparison plot: {str(e)}")
         
-        plt.show()
         plt.close()
     
     def plot_spread_and_zscore(
@@ -148,11 +154,12 @@ class CointegrationVisualizer:
         plt.tight_layout()
         
         if filename:
-            filepath = self.output_dir / filename
-            plt.savefig(filepath)
-            logger.info(f"Saved spread and z-score plot to {filepath}")
+            try:
+                plt.savefig(filename)
+                logger.info(f"Saved spread and z-score plot to {filename}")
+            except Exception as e:
+                logger.error(f"Error saving spread and z-score plot: {str(e)}")
         
-        plt.show()
         plt.close()
     
     def _add_signals_to_plot(self, ax, signals, timestamps, pair1, pair2):
@@ -231,11 +238,14 @@ class CointegrationVisualizer:
             plt.tight_layout()
             
             if filename:
-                filepath = self.output_dir / filename
-                plt.savefig(filepath)
-                logger.info(f"Saved correlation heatmap to {filepath}")
+                try:
+                    # Ensure directory exists
+                    os.makedirs(os.path.dirname(filename), exist_ok=True)
+                    plt.savefig(filename)
+                    logger.info(f"Saved correlation heatmap to {filename}")
+                except Exception as e:
+                    logger.error(f"Error saving correlation heatmap: {str(e)}")
             
-            plt.show()
             plt.close()
         else:
             logger.warning("Not enough data to create correlation heatmap")
@@ -287,11 +297,14 @@ class CointegrationVisualizer:
         plt.tight_layout()
         
         if filename:
-            filepath = self.output_dir / filename
-            plt.savefig(filepath)
-            logger.info(f"Saved cointegration results plot to {filepath}")
+            try:
+                # Ensure directory exists
+                os.makedirs(os.path.dirname(filename), exist_ok=True)
+                plt.savefig(filename)
+                logger.info(f"Saved cointegration results plot to {filename}")
+            except Exception as e:
+                logger.error(f"Error saving cointegration results plot: {str(e)}")
         
-        plt.show()
         plt.close()
     
     def plot_portfolio_performance(self, 
@@ -351,11 +364,14 @@ class CointegrationVisualizer:
         plt.tight_layout()
         
         if filename:
-            filepath = self.output_dir / filename
-            plt.savefig(filepath)
-            logger.info(f"Saved portfolio performance plot to {filepath}")
+            try:
+                # Ensure directory exists
+                os.makedirs(os.path.dirname(filename), exist_ok=True)
+                plt.savefig(filename)
+                logger.info(f"Saved portfolio performance plot to {filename}")
+            except Exception as e:
+                logger.error(f"Error saving portfolio performance plot: {str(e)}")
         
-        plt.show()
         plt.close()
     
     def create_dashboard(self, 
@@ -374,59 +390,69 @@ class CointegrationVisualizer:
         """
         logger.info("Creating comprehensive dashboard")
         
-        # Create timestamp for dashboard
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        dashboard_dir = self.output_dir / f"dashboard_{timestamp}"
-        dashboard_dir.mkdir(exist_ok=True)
-        
-        # 1. Correlation heatmap
-        self.plot_correlation_heatmap(pair_data, filename=dashboard_dir / "correlation_heatmap.png")
-        
-        # 2. Cointegration results summary
-        if cointegration_results:
-            self.plot_cointegration_results(cointegration_results, 
-                                          filename=dashboard_dir / "cointegration_results.png")
-        
-        # 3. Top cointegrated pairs
-        for i, result in enumerate(cointegration_results[:5]):  # Top 5
-            pair1 = result['pair1']
-            pair2 = result['pair2']
+        try:
+            # Create timestamp for dashboard
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             
-            # Price comparison
-            if pair1 in pair_data and pair2 in pair_data:
-                df1 = pair_data[pair1]
-                df2 = pair_data[pair2]
+            # Create dashboard directory (using absolute paths to avoid confusion)
+            dashboard_name = f"dashboard_{timestamp}"
+            dashboard_dir = os.path.abspath(os.path.join("output", dashboard_name))
+            os.makedirs(dashboard_dir, exist_ok=True)
+            
+            logger.info(f"Dashboard directory: {dashboard_dir}")
+            
+            # 1. Correlation heatmap
+            correlation_file = os.path.join(dashboard_dir, "correlation_heatmap.png")
+            self.plot_correlation_heatmap(pair_data, filename=correlation_file)
+            
+            # 2. Cointegration results summary
+            if cointegration_results:
+                cointegration_file = os.path.join(dashboard_dir, "cointegration_results.png")
+                self.plot_cointegration_results(cointegration_results, filename=cointegration_file)
+            
+            # 3. Top cointegrated pairs
+            for i, result in enumerate(cointegration_results[:5]):  # Top 5
+                pair1 = result['pair1']
+                pair2 = result['pair2']
                 
-                # Convert to Series if DataFrames
-                price1 = df1['close'] if 'close' in df1.columns else df1
-                price2 = df2['close'] if 'close' in df2.columns else df2
+                # Price comparison
+                if pair1 in pair_data and pair2 in pair_data:
+                    df1 = pair_data[pair1]
+                    df2 = pair_data[pair2]
+                    
+                    # Convert to Series if DataFrames
+                    price1 = df1['close'] if 'close' in df1.columns else df1
+                    price2 = df2['close'] if 'close' in df2.columns else df2
+                    
+                    # Ensure Series have DatetimeIndex
+                    if not isinstance(price1.index, pd.DatetimeIndex) and 'timestamp' in df1.columns:
+                        price1 = df1.set_index('timestamp')['close']
+                    
+                    if not isinstance(price2.index, pd.DatetimeIndex) and 'timestamp' in df2.columns:
+                        price2 = df2.set_index('timestamp')['close']
+                    
+                    price_file = os.path.join(dashboard_dir, f"price_comparison_{pair1}_{pair2}.png")
+                    self.plot_price_series(price1, price2, pair1, pair2, filename=price_file)
                 
-                # Ensure Series have DatetimeIndex
-                if not isinstance(price1.index, pd.DatetimeIndex) and 'timestamp' in df1.columns:
-                    price1 = df1.set_index('timestamp')['close']
-                
-                if not isinstance(price2.index, pd.DatetimeIndex) and 'timestamp' in df2.columns:
-                    price2 = df2.set_index('timestamp')['close']
-                
-                self.plot_price_series(
-                    price1, price2, pair1, pair2,
-                    filename=dashboard_dir / f"price_comparison_{pair1}_{pair2}.png"
+                # Spread and z-score
+                spread_file = os.path.join(dashboard_dir, f"spread_zscore_{pair1}_{pair2}.png")
+                self.plot_spread_and_zscore(
+                    result, 
+                    filename=spread_file,
+                    show_signals=signals is not None,
+                    signals=signals
                 )
             
-            # Spread and z-score
-            self.plot_spread_and_zscore(
-                result, 
-                filename=dashboard_dir / f"spread_zscore_{pair1}_{pair2}.png",
-                show_signals=signals is not None,
-                signals=signals
-            )
-        
-        # 4. Performance data if available
-        if performance_data is not None and not performance_data.empty:
-            self.plot_portfolio_performance(
-                performance_data,
-                filename=dashboard_dir / "performance.png"
-            )
-        
-        logger.info(f"Dashboard created in {dashboard_dir}")
-        return dashboard_dir
+            # 4. Performance data if available
+            if performance_data is not None and not performance_data.empty:
+                perf_file = os.path.join(dashboard_dir, "performance.png")
+                self.plot_portfolio_performance(performance_data, filename=perf_file)
+            
+            logger.info(f"Dashboard created in {dashboard_dir}")
+            return dashboard_dir
+            
+        except Exception as e:
+            import traceback
+            logger.error(f"Error creating dashboard: {str(e)}")
+            logger.error(traceback.format_exc())
+            return None
